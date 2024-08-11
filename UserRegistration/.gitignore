@@ -1,0 +1,43 @@
+# Django specific
+*.log
+*.pot
+*.pyc
+*.pyo
+__pycache__/
+db.sqlite3
+media/
+staticfiles/
+*.sqlite3
+
+# If you're using SQLite3 locally, ignore the database file
+db.sqlite3
+
+# Ignore virtual environment directories
+env
+.env
+.env.*
+*.env
+env/
+venv/
+ENV/
+.venv/
+
+# Ignore Python packaging
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+
+# Ignore IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore node modules if you're using Node.js
+node_modules/
+
+# Ignore macOS specific files
+.DS_Store
+.pytest_cache
