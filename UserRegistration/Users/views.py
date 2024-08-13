@@ -5,7 +5,6 @@ from .serializers import VerificationSerializer
 from .serializers import GenerateCodeSerializer
 from .serializers import LogoutUserSerializer
 from rest_framework import viewsets
-from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
@@ -28,6 +27,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
 
+# Public auxiliary function
 # ------------------------------------------------
 VERIFY_CODE_CACHE_PREFIX = 'verify_code_'
 VERIFY_CODE_EXPIRATION = 5*60
@@ -39,10 +39,29 @@ LOCKOUT_TIME = 300
 MAX_ATTEMPTS = 3
 
 
+# Public auxiliary function
 # ------------------------------------------------
 def generate_temp_password():
     return random.randint(100000, 999999)
 
+
+def get_or_create_cache_attempt_key(cache_key, phone):
+    attempts = cache.get(f'{cache_key}{phone}')
+    if attempts == None:
+        attempts = {'count': 0, 'lockout_until': None}
+    return attempts
+
+
+def reach_three_attempts(cache_key, phone, max_attempts, attempts, lockout_time):
+    attempts['count'] += 1
+    if attempts['count'] >= max_attempts:
+        attempts['lockout_until'] = timezone.now() + timedelta(seconds=lockout_time)
+
+    cache.set(f'{cache_key}{phone}', attempts)
+
+    if attempts['lockout_until'] and (timezone.now() < attempts['lockout_until']):
+        return True
+    return False
 
 # ------------------------------------------------
 class GenerateCodeViewSet(viewsets.ViewSet):
@@ -59,29 +78,36 @@ class GenerateCodeViewSet(viewsets.ViewSet):
         serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
             phone = serializer.validated_data.get('phone')
-        # if user verified
+        
         user = User.objects.filter(phone=phone).first()
         if user:
-            response = {
-                "message": "User is verified. Proceed to login.",
-            }
-            return Response(response, status=status.HTTP_200_OK)
+            return Response(self.user_already_verified_message(), status=status.HTTP_409_CONFLICT)
  
         # If user doesn't exist, send verification code | SMS service
         code = generate_temp_password()
         cache.set(f'{VERIFY_CODE_CACHE_PREFIX}{phone}', {'code': code}, VERIFY_CODE_EXPIRATION)
 
+        return Response(self.code_sent_message(code), status=status.HTTP_200_OK)
+
+
+    ### Private auxiliary functions ----------
+    def user_already_verified_message(self):
+        response = {
+            "message": "User is verified. Proceed to login.",
+        }
+        return response
+
+    def code_sent_message(self, code):
         response = {
             "verification_code": code,
         }
-        return Response(response, status=status.HTTP_200_OK)
+        return response
 
 
 # ------------------------------------------------
 class UserVerificationViewSet(viewsets.ViewSet):
 
     serializer_class = VerificationSerializer
-
 
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
@@ -97,53 +123,55 @@ class UserVerificationViewSet(viewsets.ViewSet):
             
             verification_code = cache.get(f'{VERIFY_CODE_CACHE_PREFIX}{phone}')
             if verification_code == None:
-                response = {
-                    "message": "Code is expired.",
-                }
-                return Response(response, status=status.HTTP_403_FORBIDDEN)
-            expected_code = verification_code['code']
-
-
-            # Cache key based on phone number
-            attempts = cache.get(f'{GENERATE_CODE_ATTEMPTS_KEY_PREFIX}{phone}')
-            if attempts == None:
-                attempts = {'count': 0, 'lockout_until': None}
-
-
-            if attempts['lockout_until'] and (timezone.now() < attempts['lockout_until']):
-                response = {
-                    "error": "Account is locked. Please try again later.",
-                    "attempts": attempts
-                }
-                return Response(response, status=status.HTTP_403_FORBIDDEN)
-
-
-            attempts['count'] += 1
-            if attempts['count'] >= MAX_ATTEMPTS:
-                attempts['lockout_until'] = timezone.now() + timedelta(seconds=LOCKOUT_TIME)
-            cache.set(f'{GENERATE_CODE_ATTEMPTS_KEY_PREFIX}{phone}', attempts)
-
-            if not expected_code:
-                response = {
-                    "error": "Session expired. Please start again.",
-                    "attempts": attempts
-                }
-                raise ValidationError(response)
+                return Response(self.code_expiration_message(), status=status.HTTP_410_GONE)
             
-            if (str(code) != str(expected_code)):
-                response = {
-                    "error": "Invalid verification code.",
-                    "attempts": attempts
-                }
-                raise ValidationError(response)
+            expected_code = verification_code['code']
+            attempts = get_or_create_cache_attempt_key(GENERATE_CODE_ATTEMPTS_KEY_PREFIX, phone)
+
+            if reach_three_attempts( GENERATE_CODE_ATTEMPTS_KEY_PREFIX, phone, MAX_ATTEMPTS, attempts, LOCKOUT_TIME):
+                return Response(self.locked_account_message(attempts), status=status.HTTP_423_LOCKED)
+            
+            if (not self.is_expected_code(code, expected_code)):
+                raise ValidationError(self.invalid_code_message(attempts))
             
             cache.delete(f'{GENERATE_CODE_ATTEMPTS_KEY_PREFIX}{phone}')
 
-            response = {
-                "message": "Code verified. Proceed to registration.",
-             }
-            return Response(response, status=status.HTTP_200_OK)
+            return Response(self.valid_code_message(), status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+    ### Private auxiliary functions ----------
+    def is_expected_code(self, code, expected_code):
+        if (str(code) == str(expected_code)):
+            return True
+        return False
+
+
+    def valid_code_message(self):
+        response = {
+            "message": "Code verified. Proceed to registration.",
+        }
+        return response
+    
+    def code_expiration_message(self):
+        response = {
+            "message": "Verification code is expired.",
+        }
+        return response
+    
+    def invalid_code_message(self, attempts):
+        response = {
+            "error": "Invalid verification code.",
+            "attempts": attempts
+        }
+        return response
+
+    def locked_account_message(self, attempts):
+        response = {
+            "error": "Account is locked. Please try again later.",
+            "attempts": attempts
+        }
+        return response
 
 
 # ------------------------------------------------
@@ -173,16 +201,10 @@ class UserRegisterViewSet(viewsets.ModelViewSet):
         phone = request.data.get('phone')
         code = cache.get(f'{VERIFY_CODE_CACHE_PREFIX}{phone}')
         if code == None:
-            response = {
-                "error": "Verification code is expired."
-            }
-            return Response(response, status=status.HTTP_400_BAD_REQUEST)
+            return Response(self.code_expiration_message(), status=status.HTTP_410_GONE)
 
         if not phone:
-            response = {
-                "error": "Phone number is required."
-            }
-            return Response(response, status=status.HTTP_400_BAD_REQUEST)
+            return Response(self.phone_required_message(), status=status.HTTP_400_BAD_REQUEST)
         
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -195,8 +217,23 @@ class UserRegisterViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
+    ### Private auxiliary functions ----------
+    def code_expiration_message(self):
+        response = {
+            "message": "Verification code is expired.",
+        }
+        return response
+     
+    def phone_required_message(self):
+        response = {
+            "error": "Phone number is required."
+        }
+        return response
+    
+
 # ------------------------------------------------
 class UserLoginViewSet(viewsets.ViewSet):
+
     serializer_class = LoginUserSerializer
 
     def get_permissions(self):
@@ -210,60 +247,65 @@ class UserLoginViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         phone = serializer.validated_data.get('phone')
         password = serializer.validated_data.get('password')
-
         
-        # Cache key based on phone number
-        attempts = cache.get(f'{LOGIN_ATTEMPTS_KEY_PREFIX}{phone}')
-        if attempts == None:
-            attempts = {'count': 0, 'lockout_until': None}
+        attempts = get_or_create_cache_attempt_key(LOGIN_ATTEMPTS_KEY_PREFIX, phone)
 
+        if reach_three_attempts( LOGIN_ATTEMPTS_KEY_PREFIX, phone, MAX_ATTEMPTS, attempts, LOCKOUT_TIME):
+            return Response(self.locked_account_message(attempts), status=status.HTTP_423_LOCKED)
 
-        # Check if the account is locked out
-        if attempts['lockout_until'] and (timezone.now() < attempts['lockout_until']):
-            response = {
-                "error": "Account is locked. Please try again later.",
-                "attempts": attempts
-
-            }
-            return Response(response, status=status.HTTP_403_FORBIDDEN)
-
-        # Authenticate the user
         user = authenticate(request, phone=phone, password=password)
+
         if user == request.user:
-            response = {
-                "error": "This user is already logged in."
-            }
-            return Response(response, status=status.HTTP_401_UNAUTHORIZED)
+            return Response(self.already_logged_in_message(), status=status.HTTP_409_CONFLICT)
 
-        # Incrising loggin attempts
-        if user is None:
-            attempts['count'] += 1
-            if attempts['count'] >= MAX_ATTEMPTS:
-                attempts['lockout_until'] = timezone.now() + timedelta(seconds=LOCKOUT_TIME)
-            cache.set(f'{LOGIN_ATTEMPTS_KEY_PREFIX}{phone}', attempts)
-            response = {
-                "error": "Invalid phone number or password.",
-                "attempts": attempts
-            }
-            return Response(response, status=status.HTTP_401_UNAUTHORIZED)
-
+        if (not self.is_user_authenticated(user)):
+            raise ValidationError(self.invalid_user_message(attempts))
 
         cache.delete(f'{LOGIN_ATTEMPTS_KEY_PREFIX}{phone}')
         login(request, user)
 
+        return Response(self.login_successful_message(), status=status.HTTP_200_OK)
+    
+
+    ### Private auxiliary functions ----------
+    def is_user_authenticated(self, user):
+        if user is not None:
+            return True
+        return False
+    
+
+    def locked_account_message(self, attempts):
+        response = {
+            "error": "Account is locked. Please try again later.",
+            "attempts": attempts
+        }
+        return response
+
+    def invalid_user_message(self, attempts):
+        response = {
+            "error": "Invalid phone number or password.",
+            "attempts": attempts
+        }
+        return response
+
+    def login_successful_message(self):
         response = {
                 "message": "Login successful.",
         }
-        return Response(response, status=status.HTTP_200_OK)
+        return response
     
+    def already_logged_in_message(self):
+        response = {
+            "error": "This user is already logged in."
+        }
+        return response
+
 
 # ------------------------------------------------
-# @method_decorator(csrf_exempt, name='dispatch')
 class UserLogoutViewSet(viewsets.ViewSet):
     serializer_class = LogoutUserSerializer
 
     permission_classes = [IsAuthenticated]
-
 
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
@@ -273,17 +315,24 @@ class UserLogoutViewSet(viewsets.ViewSet):
 
     def create(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
-            response = {
-                "error": "User does not authenticated.",
-            }
-            return Response(response, status=status.HTTP_400_BAD_REQUEST)
+            return Response(self.user_not_auth_message(), status=status.HTTP_401_UNAUTHORIZED)
 
         logout(request)
+        return Response(self.user_logout_message(), status=status.HTTP_200_OK)
+    
 
+    ### Private auxiliary functions ----------
+    def user_logout_message(self):
         response = {
             "message": "Logout successful",
         }
-        return Response(response, status=status.HTTP_200_OK)
+        return response
+    
+    def user_not_auth_message(self):
+        response = {
+            "error": "User does not authenticated.",
+        }
+        return response
 
 
        
