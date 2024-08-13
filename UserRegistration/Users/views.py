@@ -1,31 +1,26 @@
 from .models import User
+
 from .serializers import RegisterUserSerializer
 from .serializers import LoginUserSerializer
 from .serializers import VerificationSerializer
 from .serializers import GenerateCodeSerializer
 from .serializers import LogoutUserSerializer
+
 from rest_framework import viewsets
-from rest_framework.response import Response
-from rest_framework import status
-from django.utils import timezone
-from datetime import timedelta
-
+from rest_framework.response import Response, status
 from rest_framework.exceptions import ValidationError
-import random
-
 from rest_framework.permissions import IsAuthenticated
 
 from django.contrib.auth import authenticate
-from rest_framework.exceptions import AuthenticationFailed
 from django.contrib.auth import authenticate, login 
 from django.contrib.auth import logout
-
+from django.utils import timezone
 from django.core.cache import cache
+
 from .permissions import IsAdminOrSelf
 
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
-
+from datetime import timedelta
+import random
 
 # Public auxiliary function
 # ------------------------------------------------
@@ -259,7 +254,7 @@ class UserLoginViewSet(viewsets.ViewSet):
             return Response(self.already_logged_in_message(), status=status.HTTP_409_CONFLICT)
 
         if (not self.is_user_authenticated(user)):
-            raise ValidationError(self.invalid_user_message(attempts))
+            return Response(self.invalid_user_message(attempts), status=status.HTTP_401_UNAUTHORIZED)
 
         cache.delete(f'{LOGIN_ATTEMPTS_KEY_PREFIX}{phone}')
         login(request, user)
