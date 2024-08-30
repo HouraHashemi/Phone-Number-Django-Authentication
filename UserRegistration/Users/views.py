@@ -7,20 +7,23 @@ from .serializers import GenerateCodeSerializer
 from .serializers import LogoutUserSerializer
 
 from rest_framework import viewsets
-from rest_framework.response import Response, status
+from rest_framework.response import Response
+from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 
 from django.contrib.auth import authenticate
 from django.contrib.auth import authenticate, login 
 from django.contrib.auth import logout
-from django.utils import timezone
 from django.core.cache import cache
+from django.utils import timezone
 
 from .permissions import IsAdminOrSelf
 
 from datetime import timedelta
 import random
+
+from .utils import *
 
 # Public auxiliary function
 # ------------------------------------------------
@@ -36,9 +39,6 @@ MAX_ATTEMPTS = 3
 
 # Public auxiliary function
 # ------------------------------------------------
-def generate_temp_password():
-    return random.randint(100000, 999999)
-
 
 def get_or_create_cache_attempt_key(cache_key, phone):
     attempts = cache.get(f'{cache_key}{phone}')
@@ -71,32 +71,16 @@ class GenerateCodeViewSet(viewsets.ViewSet):
 
     def create(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data)
-        if serializer.is_valid():
-            phone = serializer.validated_data.get('phone')
+        try:
+            if serializer.is_valid():
+                code = serializer.save()  # The code is generated and sent in the serializer
+                return Response(code_sent_message(code), status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        user = User.objects.filter(phone=phone).first()
-        if user:
-            return Response(self.user_already_verified_message(), status=status.HTTP_409_CONFLICT)
- 
-        # If user doesn't exist, send verification code | SMS service
-        code = generate_temp_password()
-        cache.set(f'{VERIFY_CODE_CACHE_PREFIX}{phone}', {'code': code}, VERIFY_CODE_EXPIRATION)
-
-        return Response(self.code_sent_message(code), status=status.HTTP_200_OK)
+        except:
+            return Response(unavailable_server, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
-    ### Private auxiliary functions ----------
-    def user_already_verified_message(self):
-        response = {
-            "message": "User is verified. Proceed to login.",
-        }
-        return response
-
-    def code_sent_message(self, code):
-        response = {
-            "verification_code": code,
-        }
-        return response
 
 
 # ------------------------------------------------

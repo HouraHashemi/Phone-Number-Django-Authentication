@@ -41,8 +41,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'Users',
+    
     'rest_framework',
+    'Users',
 ]
 
 MIDDLEWARE = [
@@ -148,3 +149,6 @@ CACHES = {
         }
     }
 }
+
+
+CELERY_BROKER_URL = 'redis://localhost:6379/2'

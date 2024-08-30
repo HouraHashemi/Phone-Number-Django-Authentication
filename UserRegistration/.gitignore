@@ -21,6 +21,7 @@ env/
 venv/
 ENV/
 .venv/
+.venv
 
 # Ignore Python packaging
 *.egg
