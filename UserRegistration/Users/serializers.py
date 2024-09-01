@@ -7,6 +7,7 @@ from django.contrib.auth import authenticate
 
 from .tasks import send_verification_code
 from .utils import *
+from .messages import *
 
 
 

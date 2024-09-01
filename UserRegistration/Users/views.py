@@ -5,12 +5,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 from django.contrib.auth import authenticate
 from django.contrib.auth import authenticate, login 
 from django.contrib.auth import logout
-from django.core.cache import cache
-from django.utils import timezone
 
 from .serializers import RegisterUserSerializer
 from .serializers import LoginUserSerializer
@@ -18,11 +17,9 @@ from .serializers import VerificationSerializer
 from .serializers import GenerateCodeSerializer
 from .serializers import LogoutUserSerializer
 
-from datetime import timedelta
-import random
-
 from .permissions import IsAdminOrSelf
 from .utils import *
+from .messages import *
 
 
 import logging
@@ -32,6 +29,9 @@ logger = logging.getLogger(__name__)
 class GenerateCodeViewSet(viewsets.ViewSet):
 
     serializer_class = GenerateCodeSerializer
+
+    throttle_classes = [AnonRateThrottle]
+
 
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
@@ -53,6 +53,8 @@ class GenerateCodeViewSet(viewsets.ViewSet):
 class UserVerificationViewSet(viewsets.ViewSet):
 
     serializer_class = VerificationSerializer
+    throttle_classes = [AnonRateThrottle]
+
 
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
@@ -73,6 +75,7 @@ class UserRegisterViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = RegisterUserSerializer
 
+    throttle_classes = [AnonRateThrottle]
     # permission_classes = [IsAdminOrSelf]
 
     def get_permissions(self):
@@ -106,6 +109,11 @@ class UserRegisterViewSet(viewsets.ModelViewSet):
 class UserLoginViewSet(viewsets.ViewSet):
 
     serializer_class = LoginUserSerializer
+    # UserRateThrottle: This throttle class is used to limit the rate of requests from authenticated users.
+    # AnonRateThrottle: This throttle class is used to limit the rate of requests from anonymous (unauthenticated) users.
+
+    throttle_classes = [AnonRateThrottle, UserRateThrottle]
+
 
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
@@ -132,6 +140,7 @@ class UserLoginViewSet(viewsets.ViewSet):
 class UserLogoutViewSet(viewsets.ViewSet):
     serializer_class = LogoutUserSerializer
 
+    throttle_classes = [AnonRateThrottle]
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
